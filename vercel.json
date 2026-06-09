@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/docs.js": {
+      "maxDuration": 30
+    }
+  }
+}
