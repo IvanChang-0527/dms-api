@@ -31,14 +31,46 @@ function parseFileName(title) {
   return { code, ver, name: name || title };
 }
 
+// 遞迴掃描資料夾（含所有子資料夾）
+async function scanFolder(drive, folderId, cat, docs) {
+  let pageToken = null;
+  do {
+    const res = await drive.files.list({
+      q: `'${folderId}' in parents and trashed=false`,
+      fields: 'nextPageToken, files(id,name,mimeType,modifiedTime)',
+      pageSize: 200,
+      pageToken: pageToken || undefined,
+    });
+
+    for (const file of res.data.files || []) {
+      if (file.mimeType === 'application/vnd.google-apps.folder') {
+        // 遞迴掃描子資料夾
+        await scanFolder(drive, file.id, cat, docs);
+      } else {
+        if (!file.name || file.name.trim() === '') continue;
+        const { code, ver, name } = parseFileName(file.name);
+        docs.push({
+          code,
+          ver,
+          name,
+          cat,
+          status: 'active',
+          date: (file.modifiedTime || '').substring(0, 10),
+          dept: '船舶暨海洋產業研發中心',
+          viewUrl: mimeToViewUrl(file.id, file.mimeType),
+        });
+      }
+    }
+    pageToken = res.data.nextPageToken;
+  } while (pageToken);
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET');
   res.setHeader('Cache-Control', 'no-store');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
     const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
@@ -52,34 +84,18 @@ module.exports = async (req, res) => {
 
     for (const folder of FOLDER_MAP) {
       try {
-        const response = await drive.files.list({
-          q: `'${folder.id}' in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'`,
-          fields: 'files(id,name,mimeType,modifiedTime)',
-          pageSize: 200,
-        });
-
-        const files = response.data.files || [];
-        for (const file of files) {
-          if (!file.name || file.name.trim() === '') continue;
-          const { code, ver, name } = parseFileName(file.name);
-          allDocs.push({
-            code,
-            ver,
-            name,
-            cat: folder.cat,
-            status: 'active',
-            date: (file.modifiedTime || '').substring(0, 10),
-            dept: '船舶暨海洋產業研發中心',
-            viewUrl: mimeToViewUrl(file.id, file.mimeType),
-          });
-        }
+        await scanFolder(drive, folder.id, folder.cat, allDocs);
       } catch (err) {
-        console.error(`Error fetching folder ${folder.label}:`, err.message);
+        console.error(`Error scanning folder ${folder.label}:`, err.message);
       }
     }
 
     allDocs.sort((a, b) => a.code.localeCompare(b.code));
-    return res.status(200).json({ success: true, docs: allDocs, updatedAt: new Date().toISOString() });
+    return res.status(200).json({
+      success: true,
+      docs: allDocs,
+      updatedAt: new Date().toISOString(),
+    });
 
   } catch (err) {
     console.error('API Error:', err.message);
