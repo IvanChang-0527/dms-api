@@ -24,14 +24,35 @@ function parseFileName(title) {
   const ver = verMatch ? `Rev.${verMatch[1]}` : 'Rev.—';
   const codeMatch = title.match(/^([A-Z0-9][A-Z0-9\-]*[A-Z0-9])/);
   const code = codeMatch ? codeMatch[1] : title.substring(0, 20);
-  const name = title
-    .replace(/\.[a-z]{2,5}$/i, '')
-    .replace(/_\d{8}$/, '')
-    .trim();
+  const name = title.replace(/\.[a-z]{2,5}$/i, '').replace(/_\d{8}$/, '').trim();
   return { code, ver, name: name || title };
 }
 
-// 遞迴掃描資料夾（含所有子資料夾）
+// 掃描一層（不遞迴），回傳 { folders, files }
+async function scanOneLevelFolder(drive, folderId) {
+  const folders = [];
+  const files = [];
+  let pageToken = null;
+  do {
+    const res = await drive.files.list({
+      q: `'${folderId}' in parents and trashed=false`,
+      fields: 'nextPageToken, files(id,name,mimeType,modifiedTime)',
+      pageSize: 200,
+      pageToken: pageToken || undefined,
+    });
+    for (const file of res.data.files || []) {
+      if (file.mimeType === 'application/vnd.google-apps.folder') {
+        folders.push({ id: file.id, name: file.name });
+      } else {
+        files.push(file);
+      }
+    }
+    pageToken = res.data.nextPageToken;
+  } while (pageToken);
+  return { folders, files };
+}
+
+// 遞迴掃描（用於 cat 0-4）
 async function scanFolder(drive, folderId, cat, docs) {
   let pageToken = null;
   do {
@@ -41,20 +62,14 @@ async function scanFolder(drive, folderId, cat, docs) {
       pageSize: 200,
       pageToken: pageToken || undefined,
     });
-
     for (const file of res.data.files || []) {
       if (file.mimeType === 'application/vnd.google-apps.folder') {
-        // 遞迴掃描子資料夾
         await scanFolder(drive, file.id, cat, docs);
       } else {
-        if (!file.name || file.name.trim() === '') continue;
+        if (!file.name || !file.name.trim()) continue;
         const { code, ver, name } = parseFileName(file.name);
         docs.push({
-          code,
-          ver,
-          name,
-          cat,
-          status: 'active',
+          code, ver, name, cat, status: 'active',
           date: (file.modifiedTime || '').substring(0, 10),
           dept: '船舶暨海洋產業研發中心',
           viewUrl: mimeToViewUrl(file.id, file.mimeType),
@@ -65,40 +80,18 @@ async function scanFolder(drive, folderId, cat, docs) {
   } while (pageToken);
 }
 
-module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET');
-  res.setHeader('Cache-Control', 'no-store');
+// 掃描 cat5 資料夾結構（只掃一層子資料夾，子資料夾內的檔案也抓）
+async function scanCat5(drive, rootId) {
+  const { folders: subFolders, files: rootFiles } = await scanOneLevelFolder(drive, rootId);
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  const result = {
+    rootFiles: rootFiles.map(f => ({
+      id: f.id, name: f.name.replace(/\.[a-z]{2,5}$/i,'').trim(),
+      viewUrl: mimeToViewUrl(f.id, f.mimeType),
+      date: (f.modifiedTime||'').substring(0,10),
+    })),
+    folders: [],
+  };
 
-  try {
-    const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
-    const auth = new google.auth.GoogleAuth({
-      credentials,
-      scopes: ['https://www.googleapis.com/auth/drive.readonly'],
-    });
-
-    const drive = google.drive({ version: 'v3', auth });
-    const allDocs = [];
-
-    for (const folder of FOLDER_MAP) {
-      try {
-        await scanFolder(drive, folder.id, folder.cat, allDocs);
-      } catch (err) {
-        console.error(`Error scanning folder ${folder.label}:`, err.message);
-      }
-    }
-
-    allDocs.sort((a, b) => a.code.localeCompare(b.code));
-    return res.status(200).json({
-      success: true,
-      docs: allDocs,
-      updatedAt: new Date().toISOString(),
-    });
-
-  } catch (err) {
-    console.error('API Error:', err.message);
-    return res.status(500).json({ success: false, error: err.message });
-  }
-};
+  for (const folder of subFolders) {
+    const folderFiles = 
