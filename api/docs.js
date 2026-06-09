@@ -6,6 +6,7 @@ const FOLDER_MAP = [
   { id: '1b7xTao1IbYmClP8LN4TPn253wZ1Vqxot', cat: 2, label: '2程序書' },
   { id: '1gF0Ad0Bxs84whaXrcTTMhNkvH592MuAD', cat: 3, label: '3作業指導書' },
   { id: '1BstsKyM8hS6LvkVt9BS1X5fmOlti54RI', cat: 4, label: '4表單' },
+  { id: '1vWWnjJV2So4eI6-Hcotq-eV0byjj3Hyb', cat: 5, label: '5其他(評鑑用)' },
 ];
 
 function mimeToViewUrl(fileId, mimeType) {
